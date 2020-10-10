@@ -11,12 +11,12 @@ using VRC.SDK3.Video.Components.AVPro;
 using VRC.SDK3.Video.Components.Base;
 using VRC.SDKBase;
 using VRC.Udon;
+using VRC.SDK3.Components.Video;
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
 using UnityEditor;
 using UnityEditorInternal;
 using UdonSharpEditor;
-using System.Collections.Generic;
 #endif
 
 namespace UdonSharp.Video
@@ -33,6 +33,9 @@ namespace UdonSharp.Video
 
         [Tooltip("Whether to allow video seeking with the progress bar on the video")]
         public bool allowSeeking = true;
+
+        [Tooltip("If enabled defaults to unlocked so anyone can put in a URL")]
+        public bool defaultUnlocked = false;
         
         [Tooltip("How often the video player should check if it is more than Sync Threshold out of sync with the video time")]
         public float syncFrequency = 5.0f;
@@ -123,6 +126,12 @@ namespace UdonSharp.Video
             //_currentPlayer = avProVideoPlayer;
             _videoRenderTex = (RenderTexture)screenRenderer.sharedMaterial.GetTexture("_EmissionMap");
 
+            if (defaultUnlocked && Networking.IsOwner(gameObject))
+            {
+                _masterOnly = false;
+                _masterOnlyLocal = false;
+            }
+
             PlayNextVideoFromPlaylist();
 #if !UNITY_EDITOR // Causes null ref exceptions so just exclude it from the editor
             masterTextField.text = Networking.GetOwner(masterCheckObj).displayName;
@@ -131,8 +140,10 @@ namespace UdonSharp.Video
 
         private void OnDisable()
         {
+#if COMPILER_UDONSHARP
             screenRenderer.sharedMaterial.SetTexture("_EmissionMap", _videoRenderTex);
             screenRenderer.sharedMaterial.SetInt("_IsAVProInput", 0);
+#endif
         }
 
         void TakeOwnership()
@@ -149,12 +160,12 @@ namespace UdonSharp.Video
         void StartVideoLoad(VRCUrl url)
         {
             Debug.Log("[USharpVideo] Started video load");
-            _currentPlayer.LoadURL(url);
             _statusStr = "Loading video...";
             SetStatusText(_statusStr);
             _loadingVideo = true;
             _currentLoadingTime = 0f;
             _currentRetryCount = 0;
+            _currentPlayer.LoadURL(url);
         }
 
         void PlayVideo(VRCUrl url, bool disablePlaylist)
@@ -452,7 +463,7 @@ namespace UdonSharp.Video
             PlayNextVideoFromPlaylist();
         }
 
-        public override void OnVideoError()
+        public override void OnVideoError(VideoError videoError)
         {
             _loadingVideo = false;
             _currentLoadingTime = 0f;
@@ -462,7 +473,24 @@ namespace UdonSharp.Video
             _currentPlayer.Stop();
             Debug.LogError("[USharpVideo] Video failed: " + _syncedURL);
 
-            _statusStr = "Failed to load video";
+            switch (videoError)
+            {
+                case VideoError.RateLimited:
+                    _statusStr = "Rate limited, try again in a few seconds";
+                    break;
+                case VideoError.PlayerError:
+                    _statusStr = "Video player error";
+                    break;
+                case VideoError.InvalidURL:
+                    _statusStr = "Invalid URL";
+                    break;
+                case VideoError.AccessDenied:
+                    _statusStr = "Video blocked, enable untrusted URLs";
+                    break;
+                default:
+                    _statusStr = "Failed to load video";
+                    break;
+            }
             SetStatusText(_statusStr);
             PlayNextVideoFromPlaylist();
         }
@@ -479,7 +507,7 @@ namespace UdonSharp.Video
 
                     if (++_currentRetryCount > MAX_RETRY_COUNT)
                     {
-                        OnVideoError();
+                        OnVideoError(VideoError.Unknown);
                     }
                     else
                     {
@@ -755,6 +783,7 @@ namespace UdonSharp.Video
         ReorderableList playlistList;
 
         SerializedProperty allowSeekProperty;
+        SerializedProperty defaultUnlockedProperty;
         SerializedProperty syncFrequencyProperty;
         SerializedProperty syncThresholdProperty;
         SerializedProperty playlistProperty;
@@ -790,12 +819,14 @@ namespace UdonSharp.Video
             streamRTSourceProperty = serializedObject.FindProperty(nameof(USharpVideoPlayer.streamRTSource));
 
             allowSeekProperty = serializedObject.FindProperty(nameof(USharpVideoPlayer.allowSeeking));
+            defaultUnlockedProperty = serializedObject.FindProperty(nameof(USharpVideoPlayer.defaultUnlocked));
             syncFrequencyProperty = serializedObject.FindProperty(nameof(USharpVideoPlayer.syncFrequency));
             syncThresholdProperty = serializedObject.FindProperty(nameof(USharpVideoPlayer.syncThreshold));
 
             playlistProperty = serializedObject.FindProperty(nameof(USharpVideoPlayer.playlist));
 
             // UI Fields
+            inputFieldProperty = serializedObject.FindProperty(nameof(USharpVideoPlayer.inputField));
             urlTextProperty = serializedObject.FindProperty(nameof(USharpVideoPlayer.urlText));
             urlPlaceholderTextProperty = serializedObject.FindProperty(nameof(USharpVideoPlayer.urlPlaceholderText));
             masterLockedIconProperty = serializedObject.FindProperty(nameof(USharpVideoPlayer.masterLockedIcon));
@@ -836,6 +867,7 @@ namespace UdonSharp.Video
             EditorGUILayout.PropertyField(avProVideoPlayerProperty);
 
             EditorGUILayout.PropertyField(allowSeekProperty);
+            EditorGUILayout.PropertyField(defaultUnlockedProperty);
             EditorGUILayout.PropertyField(syncFrequencyProperty);
             EditorGUILayout.PropertyField(syncThresholdProperty);
 
@@ -852,6 +884,7 @@ namespace UdonSharp.Video
                 EditorGUILayout.PropertyField(screenRendererProperty);
                 EditorGUILayout.PropertyField(streamRTSourceProperty);
 
+                EditorGUILayout.PropertyField(inputFieldProperty);
                 EditorGUILayout.PropertyField(urlTextProperty);
                 EditorGUILayout.PropertyField(urlPlaceholderTextProperty);
                 EditorGUILayout.PropertyField(masterLockedIconProperty);
